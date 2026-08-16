@@ -28,6 +28,7 @@ module.exports = {
     new UglifyJsPlugin({
       test: /\.js($|\?)/i
     }),
+    new webpack.IgnorePlugin({ resourceRegExp: /^pg-native$/ }),
     new BundleAnalyzerPlugin()
   ],
 };

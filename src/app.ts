@@ -1,46 +1,56 @@
-import { createWriteStream, DelimiterFormatter, FileWriter } from 'io-one';
-import { ConnectionPool } from 'mssql';
-import { Exporter, select, Statement } from 'mssql-core';
-import { User, userModel } from './user';
+import { merge } from "config-plus"
+import { createWriteStream, CSVFormatter, FileWriter, getPrefix, LogWriter, timeToString, toString } from "export-kit"
+import { createFileLogger } from "logger-core"
+import sql from "mssql"
+import { ExportService, select, Statement } from "mssql-core"
+import path from "path"
+import { config, environments } from "./config"
+import { User, userModel } from "./user"
+
+const cfg = merge(config, process.env, environments, process.env.ENV)
 
 export class QueryBuilder {
-  buildQuery = (): Promise<Statement> => {
-    const stmt: Statement = {query: select('users3', userModel)};
-    return Promise.resolve(stmt);
+  constructor() {
+    this.buildQuery = this.buildQuery.bind(this)
+  }
+  buildQuery(cxt?: any): Promise<Statement> {
+    const stmt: Statement = { query: select("export_users", userModel) }
+    return Promise.resolve(stmt)
   }
 }
 
-export const db = new ConnectionPool({
-  user: 'userA',
-  password: '1qaZ2wsX',
-  server: 'localhost',
-  database: 'masterdata',
-  port: 1433,
-  pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000
-  },
-  options: {
-    trustServerCertificate: true,
-    trustedConnection: true,
-    encrypt: true,
-    enableArithAbort: true,
-  },
-});
+async function exportData() {
+  const now = new Date()
+  const errorWriter = new LogWriter(getPrefix(cfg.error.prefix, now) + "_" + timeToString(now) + cfg.error.suffix, cfg.error.directory)
+  const logWriter = new LogWriter(getPrefix(cfg.info.prefix, now) + "_" + timeToString(now) + cfg.info.suffix, cfg.info.directory)
 
-async function exportCSV() {
-  const dir = './dest_dir/';
-  const writeStream = createWriteStream(dir, 'export.csv');
-  const writer = new FileWriter(writeStream);
-  // (D) EXPORT TO CSV
-  const transform = new DelimiterFormatter<User>(',', userModel);
-  const queryBuilder = new QueryBuilder();
-  // (D1) ON ERROR
-  // const exporter = new ExportService<User>(pool, queryBuilder, transform, writer);
-  const exporter = new Exporter<User>(db, queryBuilder.buildQuery, transform.format, writer.write, writer.end, userModel);
-  const total = await exporter.export();
-  console.log(total);
+  const logger = createFileLogger(cfg.log, errorWriter.write, logWriter.write)
+
+  const dir = cfg.file.path
+  const filename = getPrefix(cfg.file.prefix, now) + "_" + timeToString(now) + ".csv"
+  const writeStream = createWriteStream(dir, filename)
+  const writer = new FileWriter(writeStream)
+  const pool = await sql.connect(cfg.db)
+
+  const formatter = new CSVFormatter<User>(userModel, ",")
+  const queryBuilder = new QueryBuilder()
+
+  try {
+    logger.info(`Start to export "${path.join(dir, filename)}" file`)
+    writer.write(cfg.file.header)
+    const exporter = new ExportService<User>(pool, filename, queryBuilder, formatter, writer, userModel, logger.info, 3)
+    // const exporter = new Exporter<User>(pool, filename, queryBuilder.buildQuery, formatter.format, writer.write, writer.end, userModel, logger.info, 3);
+    const total = await exporter.export()
+
+    logger.info(`Export "${path.join(dir, filename)}" file. Total: ${total}`)
+  } catch (err) {
+    logger.error(`Error when export "${path.join(dir, filename)}" file. Details: ${toString(err)}`)
+  } finally {
+    errorWriter.flush()
+    errorWriter.end()
+    logWriter.flush()
+    logWriter.end()
+  }
 }
 
-exportCSV();
+exportData()
