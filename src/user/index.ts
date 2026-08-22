@@ -11,7 +11,7 @@ export interface User {
 export function toString(v: any): string {
   return v.toISOString()
 }
-export const userModel: Attributes = {
+export const userSchema: Attributes = {
   id: {
     key: true,
     length: 11,
